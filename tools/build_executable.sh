@@ -68,6 +68,22 @@ then
     NETCDF_DIR=
     NETCDF_FORTRAN_DIR=
 
+elif [ $system == "delftblue" ]
+then
+    module load 2024r1
+    module load openmpi
+    module load cmake
+    module load netcdf-c netcdf-fortran fftw
+    export CPATH=$FFTW_ROOT/include:${CPATH}
+    FC=mpifort
+    NETCDF_DIR=$(nc-config --prefix)
+    NETCDF_FORTRAN_DIR=$(nf-config --prefix)
+    # Override FPE trapping flags to avoid crashes with NetCDF library
+    # NetCDF operations can trigger FPEs that are safe to ignore
+    export CMAKE_Fortran_FLAGS_OVERRIDE="-fdefault-real-8 -ffree-line-length-none -std=f2008"
+    # Flag to indicate we need to patch CMakeLists.txt
+    export PATCH_CMAKE_LISTS=1
+
 else
     echo "This configuration is not avalable"
     exit 1
@@ -76,14 +92,65 @@ fi
 
 # Configure and Build
 path_to_build_dir="$(pwd)/build/$build_type"
+# For DelftBlue, clean build directory to ensure FPE flags override is applied
+if [ "$system" == "delftblue" ] && [ -d "$path_to_build_dir" ]; then
+    echo "Cleaning DelftBlue build directory to apply FPE flags override..."
+    rm -rf "$path_to_build_dir"
+fi
 mkdir -p $path_to_build_dir
 pushd $path_to_build_dir
 cmake_build_type="$(capitalize $build_type)"
-FC=$FC cmake -DNETCDF_DIR=$NETCDF_DIR \
-             -DNETCDF_FORTRAN_DIR=$NETCDF_FORTRAN_DIR \
-             -DCMAKE_BUILD_TYPE=$cmake_build_type \
-	     -DFFTW_DOUBLE_OPENMP_LIB=$FFTW_DOUBLE_LIB \
-	     -DFFTW_FLOAT_OPENMP_LIB=$FFTW_FLOAT_LIB \
-              ../../ 2>&1 | tee -a $path_to_build_dir/config.log
+
+# Patch CMakeLists.txt files to remove FPE flags if needed (for DelftBlue)
+if [ ! -z "$PATCH_CMAKE_LISTS" ] && [ "$PATCH_CMAKE_LISTS" == "1" ]; then
+    echo "Temporarily patching CMakeLists.txt files to remove FPE trapping flags..."
+    # Patch main CMakeLists.txt
+    CMAKELISTS_FILE="../../CMakeLists.txt"
+    if [ -f "$CMAKELISTS_FILE" ]; then
+        cp "$CMAKELISTS_FILE" "${CMAKELISTS_FILE}.bak"
+        sed -i 's/-ffpe-trap=invalid,zero,overflow //g' "$CMAKELISTS_FILE"
+        RESTORE_CMAKE_LISTS=1
+    fi
+    # Patch 2decomp-fft CMakeLists.txt
+    DECOMP_CMAKE="../../2decomp-fft/CMakeLists.txt"
+    if [ -f "$DECOMP_CMAKE" ]; then
+        cp "$DECOMP_CMAKE" "${DECOMP_CMAKE}.bak"
+        sed -i 's/-ffpe-trap=invalid,zero,overflow //g' "$DECOMP_CMAKE"
+        RESTORE_DECOMP_CMAKE=1
+    fi
+fi
+
+# Build cmake command - add FPE flags override if set (e.g., for DelftBlue to avoid NetCDF FPE crashes)
+if [ ! -z "$CMAKE_Fortran_FLAGS_OVERRIDE" ]; then
+    FC=$FC cmake -DNETCDF_DIR=$NETCDF_DIR \
+                 -DNETCDF_FORTRAN_DIR=$NETCDF_FORTRAN_DIR \
+                 -DCMAKE_BUILD_TYPE=$cmake_build_type \
+	         -DFFTW_DOUBLE_OPENMP_LIB=$FFTW_DOUBLE_LIB \
+	         -DFFTW_FLOAT_OPENMP_LIB=$FFTW_FLOAT_OPENMP_LIB \
+                 -DCMAKE_Fortran_FLAGS:STRING="$CMAKE_Fortran_FLAGS_OVERRIDE" \
+                  ../../ 2>&1 | tee -a $path_to_build_dir/config.log
+else
+    FC=$FC cmake -DNETCDF_DIR=$NETCDF_DIR \
+                 -DNETCDF_FORTRAN_DIR=$NETCDF_FORTRAN_DIR \
+                 -DCMAKE_BUILD_TYPE=$cmake_build_type \
+	         -DFFTW_DOUBLE_OPENMP_LIB=$FFTW_DOUBLE_LIB \
+	         -DFFTW_FLOAT_OPENMP_LIB=$FFTW_FLOAT_OPENMP_LIB \
+                  ../../ 2>&1 | tee -a $path_to_build_dir/config.log
+fi
 make -j$NPROC 2>&1 | tee -a $path_to_build_dir/build.log
 popd
+
+# Restore CMakeLists.txt files if they were patched
+if [ ! -z "$RESTORE_CMAKE_LISTS" ] && [ "$RESTORE_CMAKE_LISTS" == "1" ]; then
+    echo "Restoring original CMakeLists.txt files..."
+    CMAKELISTS_FILE="CMakeLists.txt"
+    if [ -f "${CMAKELISTS_FILE}.bak" ]; then
+        mv "${CMAKELISTS_FILE}.bak" "$CMAKELISTS_FILE"
+    fi
+    if [ ! -z "$RESTORE_DECOMP_CMAKE" ] && [ "$RESTORE_DECOMP_CMAKE" == "1" ]; then
+        DECOMP_CMAKE="2decomp-fft/CMakeLists.txt"
+        if [ -f "${DECOMP_CMAKE}.bak" ]; then
+            mv "${DECOMP_CMAKE}.bak" "$DECOMP_CMAKE"
+        fi
+    fi
+fi

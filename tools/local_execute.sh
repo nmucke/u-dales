@@ -71,8 +71,37 @@ cp -r ./* $outdir
 ## go to execution and output directory
 pushd $outdir
 
+## Load MPI modules if on DelftBlue (check if module command exists)
+if command -v module &> /dev/null; then
+    # ensure module command is initialized inside non-interactive shell
+    if [ -f /etc/profile.d/modules.sh ]; then
+        source /etc/profile.d/modules.sh
+    fi
+    # Try to detect if we're on DelftBlue and load appropriate modules
+    if module avail 2024r1 &> /dev/null || module avail 2023r1 &> /dev/null; then
+        # Load modules compatible with the build (MPI + NetCDF + FFTW)
+        if module avail 2024r1 &> /dev/null; then
+            module load 2024r1 openmpi netcdf-c netcdf-fortran fftw 2>/dev/null || true
+        elif module avail 2023r1 &> /dev/null; then
+            module load 2023r1 openmpi netcdf-c netcdf-fortran fftw 2>/dev/null || true
+        fi
+    fi
+fi
+
+export HDF5_USE_FILE_LOCKING=FALSE
+
 ## execute program with mpi
-mpiexec -n $NCPU --oversubscribe $DA_BUILD namoptions.$exp 2>&1 | tee -a run.$exp.log
+# Try mpirun first (OpenMPI), then mpiexec, then srun
+if command -v mpirun &> /dev/null; then
+    mpirun -n $NCPU --oversubscribe $DA_BUILD namoptions.$exp 2>&1 | tee -a run.$exp.log
+elif command -v mpiexec &> /dev/null; then
+    mpiexec -n $NCPU --oversubscribe $DA_BUILD namoptions.$exp 2>&1 | tee -a run.$exp.log
+elif command -v srun &> /dev/null; then
+    srun -n $NCPU $DA_BUILD namoptions.$exp 2>&1 | tee -a run.$exp.log
+else
+    echo "Error: No MPI launcher found (mpirun, mpiexec, or srun)"
+    exit 1
+fi
 
 ## Merge output files across outputs.
 if (($NCPU > 1 )); then
