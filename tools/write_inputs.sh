@@ -78,9 +78,13 @@ cat <<EOF > pre-job.$iexpnr
 #PBS -l walltime=24:00:00
 #PBS -l select=1:ncpus=8:mem=64gb
 
-module load tools/prod
-module load MATLAB/2024b
-module load GCC/14.2.0
+# Load DelftBlue software stack and MATLAB
+if module avail 2024r1 &> /dev/null; then
+    module load 2024r1
+elif module avail 2023r1 &> /dev/null; then
+    module load 2023r1
+fi
+module load matlab
 
 cd $DA_TOOLSDIR
 
@@ -97,6 +101,14 @@ EOF
 	echo "pre-job.$iexpnr submitted."
 else
 	###### RUN MATLAB SCRIPT
+	# Load DelftBlue software stack and MATLAB
+	if module avail 2024r1 &> /dev/null; then
+		module load 2024r1
+	elif module avail 2023r1 &> /dev/null; then
+		module load 2023r1
+	fi
+	module load matlab
+	
 	cd $DA_TOOLSDIR
 	nohup matlab -nodesktop -noFigureWindows -nosplash -nodisplay -r "expnr=$iexpnr; write_inputs; quit" > $inputdir/write_inputs.$iexpnr.log 2>&1 < /dev/null &
 	cd $DA_EXPDIR

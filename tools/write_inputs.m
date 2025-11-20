@@ -232,6 +232,11 @@ if r.libm
 
             %vf = view3d(view3d_exe, fpath_facets_view3d, fpath_vf);
             if r.calc_vf % run view3d
+                % Check if view3d executable exists
+                if ~isfile(view3d_exe)
+                    error('Error: View3D executable not found at %s\nPlease build View3D first by running: ./u-dales/tools/build_preprocessing.sh <platform>', view3d_exe);
+                end
+                
                 % Write STL in View3D input format
                 fpath_facets_view3d = [fpath 'facets.vs3'];
                 STLtoView3D(r.stl_file, fpath_facets_view3d, r.view3d_out, r.maxD, 0, 0);
@@ -245,9 +250,20 @@ if r.libm
                 end
 
                 view3d_execution_command = [view3d_exe ' ' fpath_facets_view3d ' ' fpath_vf];
-                system(view3d_execution_command);
+                status = system(view3d_execution_command);
+                if status ~= 0
+                    error('Error: View3D execution failed with status %d. Command: %s', status, view3d_execution_command);
+                end
+                
+                % Check if output file was created
+                if ~isfile(fpath_vf)
+                    error('Error: View3D output file not created: %s\nView3D execution may have failed.', fpath_vf);
+                end
             else % view3d has already been run - read output file
                 fpath_vf = r.vf_path;
+                if ~isfile(fpath_vf)
+                    error('Error: View factor file not found: %s\nSet calc_vf=true to calculate view factors or provide a valid vf_path.', fpath_vf);
+                end
             end
 
             if r.view3d_out == 0
@@ -256,6 +272,9 @@ if r.libm
                 vf = sparse(vf);
             elseif r.view3d_out == 1
                 fID = fopen(fpath_vf);
+                if fID == -1
+                    error('Error: Could not open view factor file: %s', fpath_vf);
+                end
                 area = fread(fID, 8+r.nfcts, 'single'); % first 8 bytes are header
                 vf = fread(fID, r.nfcts^2, 'single');
                 fclose(fID);
